@@ -1,0 +1,54 @@
+{
+  "id": "docker",
+  "name": "Docker",
+  "version": "0.1.0",
+  "apiVersion": 1,
+  "publisher": "PiCode",
+  "description": "See and manage your Docker containers, grouped by compose project, from PiCode.",
+  "icon": "icons/docker.png",
+  "process": {
+    "command": "go",
+    "args": ["run", "${extensionDir}/server"]
+  },
+  "ui": {
+    "pages": [
+      {
+        "id": "containers",
+        "title": "Docker",
+        "path": "ui/containers.html"
+      }
+    ]
+  },
+  "contributes": {
+    "commands": [
+      {
+        "id": "open-containers",
+        "title": "Open Docker",
+        "page": "containers"
+      }
+    ],
+    "openWith": [
+      {
+        "pattern": "docker-compose.yml",
+        "page": "containers",
+        "title": "Open in Docker"
+      },
+      {
+        "pattern": "compose.yml",
+        "page": "containers",
+        "title": "Open in Docker"
+      },
+      {
+        "pattern": "Dockerfile",
+        "page": "containers",
+        "title": "Open in Docker"
+      }
+    ],
+    "menus": {
+      "workspace": ["open-containers"]
+    }
+  },
+  "activation": {
+    "files": ["docker-compose.yml", "compose.yml", "Dockerfile"]
+  }
+}

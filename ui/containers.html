@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Docker</title>
+<link rel="stylesheet" href="../__picode/tokens.css">
+<style>
+  .stack { display: grid; gap: 12px; max-width: 960px; }
+  .head { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+  .group-title { display: flex; align-items: baseline; gap: 8px; margin: 0 0 8px; }
+  .group-title .pc-muted { font-size: 11.5px; }
+  .rows { list-style: none; margin: 0; padding: 0; display: grid; gap: 1px; background: var(--pc-border); border: 1px solid var(--pc-border); border-radius: var(--pc-radius); overflow: hidden; }
+  .row { display: grid; grid-template-columns: 1fr auto auto; align-items: center; gap: 10px; padding: 8px 12px; background: var(--pc-panel); cursor: pointer; border: 0; width: 100%; text-align: left; font: inherit; color: inherit; }
+  .row:hover { background: var(--pc-hover); }
+  .row.selected { background: var(--pc-hover); box-shadow: inset 2px 0 0 var(--pc-accent); }
+  .row-name { min-width: 0; }
+  .row-name .name { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .row-name .image { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; color: var(--pc-text-muted); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--pc-text-muted); flex: none; }
+  .dot.running { background: var(--pc-ok); }
+  .dot.restarting { background: var(--pc-warn); }
+  .state { font-size: 11.5px; color: var(--pc-text-muted); white-space: nowrap; }
+  .detail-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+  .kv { list-style: none; margin: 8px 0 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 4px 16px; font-size: 12px; }
+  .kv li { display: flex; justify-content: space-between; gap: 8px; }
+  .kv .k { color: var(--pc-text-muted); }
+  .logs { margin: 8px 0 0; padding: 10px; background: var(--pc-bg); border: 1px solid var(--pc-border); border-radius: var(--pc-radius); max-height: 320px; overflow: auto; white-space: pre-wrap; word-break: break-word; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body class="pc-page">
+<div class="stack">
+  <div class="pc-card">
+    <div class="head">
+      <div>
+        <h2 class="pc-title">Docker</h2>
+        <div class="pc-muted" id="status" role="status">Checking…</div>
+      </div>
+      <button class="pc-button" id="refresh" type="button">Refresh</button>
+    </div>
+  </div>
+
+  <div id="groups"></div>
+
+  <div class="pc-card" id="detail-card" hidden>
+    <div class="detail-head">
+      <div>
+        <h2 class="pc-title" id="d-name"></h2>
+        <div class="pc-muted" id="d-image"></div>
+      </div>
+      <div class="pc-row" id="d-actions"></div>
+    </div>
+    <p class="pc-warn" id="d-note" role="status" hidden></p>
+    <ul class="kv" id="d-kv"></ul>
+    <pre class="logs pc-code" id="d-logs"></pre>
+  </div>
+</div>
+<script>
+(async () => {
+  const $ = (id) => document.getElementById(id);
+  await picode.use("theme");
+  const proc = await picode.use("process");
+  const ctx = await picode.use("context");
+  if (!proc) { $("status").textContent = "Turn Docker on in a workspace to use this page."; return; }
+
+  async function call(path, body) {
+    const r = await proc.request(path, body === undefined ? { method: "GET" } : { method: "POST", body: JSON.stringify(body), contentType: "application/json" });
+    let data = {};
+    try { data = JSON.parse(r.body || "{}"); } catch { data = { message: r.body }; }
+    if (r.status >= 400) throw new Error(data.message || "Docker's program answered " + r.status);
+    return data;
+  }
+
+  let selected = null;
+  const actionVerb = { start: "Start", stop: "Stop", restart: "Restart" };
+
+  function containerRow(c) {
+    const li = document.createElement("li");
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "row" + (selected === c.id ? " selected" : "");
+    const dot = document.createElement("span");
+    dot.className = "dot " + c.state;
+    const name = document.createElement("span");
+    name.className = "row-name";
+    const n = document.createElement("span"); n.className = "name"; n.textContent = c.name;
+    const img = document.createElement("span"); img.className = "image"; img.textContent = c.image;
+    name.append(n, img);
+    const state = document.createElement("span");
+    state.className = "state";
+    state.textContent = c.status || c.state;
+    btn.append(dot, name, state);
+    btn.onclick = () => { selected = c.id; showDetail(c.id); draw(); };
+    li.appendChild(btn);
+    return li;
+  }
+
+  let lastGroups = [];
+  function draw() {
+    const container = $("groups");
+    container.innerHTML = "";
+    if (!lastGroups.length) {
+      const p = document.createElement("p");
+      p.className = "pc-muted";
+      p.textContent = "No containers on this Docker connection.";
+      container.appendChild(p);
+      return;
+    }
+    for (const g of lastGroups) {
+      const card = document.createElement("div");
+      card.className = "pc-card";
+      const h = document.createElement("h3");
+      h.className = "group-title";
+      const t = document.createElement("span"); t.textContent = g.project || "Standalone containers";
+      const c = document.createElement("span"); c.className = "pc-muted"; c.textContent = g.containers.length + (g.containers.length === 1 ? " container" : " containers");
+      h.append(t, c);
+      const ul = document.createElement("ul");
+      ul.className = "rows";
+      for (const cont of g.containers) ul.appendChild(containerRow(cont));
+      card.append(h, ul);
+      container.appendChild(card);
+    }
+  }
+
+  async function refresh() {
+    $("refresh").disabled = true;
+    try {
+      const r = await call("/containers");
+      lastGroups = r.groups || [];
+      $("status").textContent = r.count === 1 ? "1 container" : r.count + " containers";
+      draw();
+      if (selected && !lastGroups.some((g) => g.containers.some((c) => c.id === selected))) {
+        selected = null;
+        $("detail-card").hidden = true;
+      } else if (selected) {
+        showDetail(selected);
+      }
+    } catch (e) {
+      $("status").textContent = e.message;
+    } finally {
+      $("refresh").disabled = false;
+    }
+  }
+
+  async function showDetail(id) {
+    $("detail-card").hidden = false;
+    try {
+      const d = await call("/containers/" + id);
+      $("d-name").textContent = d.name;
+      $("d-image").textContent = d.image;
+      $("d-kv").innerHTML = "";
+      const rows = [["State", d.status || d.state]];
+      if (d.health) rows.push(["Health", d.health]);
+      if (d.cpuPercent != null) rows.push(["CPU", d.cpuPercent.toFixed(1) + "%"]);
+      if (d.memoryBytes) rows.push(["Memory", (d.memoryBytes / (1024 * 1024)).toFixed(0) + " / " + (d.limitBytes / (1024 * 1024)).toFixed(0) + " MiB"]);
+      if (d.restartCount) rows.push(["Restarts", String(d.restartCount)]);
+      for (const [k, v] of rows) {
+        const li = document.createElement("li");
+        const kEl = document.createElement("span"); kEl.className = "k"; kEl.textContent = k;
+        const vEl = document.createElement("span"); vEl.textContent = v;
+        li.append(kEl, vEl);
+        $("d-kv").appendChild(li);
+      }
+      $("d-actions").innerHTML = "";
+      for (const verb of d.actions || []) {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.className = "pc-button" + (verb === "stop" ? " danger" : verb === "start" ? " primary" : "");
+        b.textContent = actionVerb[verb] || verb;
+        b.onclick = () => runAction(id, verb);
+        $("d-actions").appendChild(b);
+      }
+      $("d-note").hidden = true;
+      $("d-logs").textContent = d.logsError ? "Logs are unavailable: " + d.logsError : (d.logs && d.logs.trim() ? d.logs : "No recent logs.");
+    } catch (e) {
+      $("d-note").hidden = false;
+      $("d-note").textContent = e.message;
+    }
+  }
+
+  async function runAction(id, verb) {
+    $("d-actions").querySelectorAll("button").forEach((b) => { b.disabled = true; });
+    try {
+      await call("/containers/" + id + "/action", { action: verb });
+      await refresh();
+    } catch (e) {
+      $("d-note").hidden = false;
+      $("d-note").textContent = e.message;
+      $("d-actions").querySelectorAll("button").forEach((b) => { b.disabled = false; });
+    }
+  }
+
+  $("refresh").onclick = refresh;
+
+  // Opened with a compose/Dockerfile (Open with): note which one.
+  function showContext(c) {
+    if (c && c.path) $("status").textContent = "Opened with " + c.path.split(/[\\/]/).pop() + " — " + $("status").textContent;
+  }
+  if (ctx) ctx.onChange(showContext);
+
+  await refresh();
+  setInterval(() => { if (!document.hidden) refresh(); }, 10000);
+})();
+</script>
+</body>
+</html>
