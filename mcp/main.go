@@ -38,7 +38,7 @@ func setStdout(w io.Writer) {
 	stdout = w
 }
 
-const version = "0.2.3"
+const version = "0.2.4"
 
 type tool struct {
 	Name        string          `json:"name"`
