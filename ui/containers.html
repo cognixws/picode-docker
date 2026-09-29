@@ -26,6 +26,12 @@
   .kv li { display: flex; justify-content: space-between; gap: 8px; }
   .kv .k { color: var(--pc-text-muted); }
   .logs { margin: 8px 0 0; padding: 10px; background: var(--pc-bg); border: 1px solid var(--pc-border); border-radius: var(--pc-radius); max-height: 320px; overflow: auto; white-space: pre-wrap; word-break: break-word; }
+  /* The detail opens right under its row, inside the list; its home only
+     holds it while the list is rebuilt. */
+  #detail-home { display: none; }
+  .rows > li.detail-slot { background: var(--pc-panel); }
+  .detail-slot .pc-card { border: 0; border-radius: 0; padding: 4px 12px 12px 30px; }
+  @media (max-width: 480px) { .detail-slot .pc-card { padding-left: 12px; } }
   [hidden] { display: none !important; }
 </style>
 </head>
@@ -43,7 +49,7 @@
 
   <div id="groups"></div>
 
-  <div class="pc-card" id="detail-card" hidden>
+  <div id="detail-home"><div class="pc-card" id="detail-card" hidden>
     <div class="detail-head">
       <div>
         <h2 class="pc-title" id="d-name"></h2>
@@ -54,7 +60,7 @@
     <p class="pc-warn" id="d-note" role="status" hidden></p>
     <ul class="kv" id="d-kv"></ul>
     <pre class="logs pc-code" id="d-logs"></pre>
-  </div>
+  </div></div>
 </div>
 <script>
 (async () => {
@@ -73,6 +79,7 @@
   }
 
   let selected = null;
+  let shownId = null;
   const actionVerb = { start: "Start", stop: "Stop", restart: "Restart" };
 
   function containerRow(c) {
@@ -80,6 +87,7 @@
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = "row" + (selected === c.id ? " selected" : "");
+    btn.setAttribute("aria-expanded", selected === c.id ? "true" : "false");
     const dot = document.createElement("span");
     dot.className = "dot " + c.state;
     const name = document.createElement("span");
@@ -91,7 +99,14 @@
     state.className = "state";
     state.textContent = c.status || c.state;
     btn.append(dot, name, state);
-    btn.onclick = () => { selected = c.id; showDetail(c.id); draw(); };
+    btn.onclick = () => {
+      // The open row closes on a second click.
+      if (selected === c.id) { selected = null; $("detail-card").hidden = true; draw(); return; }
+      selected = c.id;
+      draw();
+      showDetail(c.id);
+      $("detail-card").scrollIntoView({ block: "nearest", behavior: "smooth" });
+    };
     li.appendChild(btn);
     return li;
   }
@@ -99,6 +114,15 @@
   let lastGroups = [];
   function draw() {
     const container = $("groups");
+    // Park the detail at its home before the list is rebuilt, so the
+    // rebuild never drops it; it moves back under its row below, held by
+    // reference (the new list is not in the document while it is built, so
+    // a lookup by id finds nothing). Moving it resets the log box's scroll,
+    // so that is carried across.
+    const card = $("detail-card");
+    const logs = $("d-logs");
+    const logsTop = logs.scrollTop;
+    $("detail-home").appendChild(card);
     container.innerHTML = "";
     if (!lastGroups.length) {
       const p = document.createElement("p");
@@ -108,8 +132,8 @@
       return;
     }
     for (const g of lastGroups) {
-      const card = document.createElement("div");
-      card.className = "pc-card";
+      const groupCard = document.createElement("div");
+      groupCard.className = "pc-card";
       const h = document.createElement("h3");
       h.className = "group-title";
       const t = document.createElement("span"); t.textContent = g.project || "Standalone containers";
@@ -117,10 +141,19 @@
       h.append(t, c);
       const ul = document.createElement("ul");
       ul.className = "rows";
-      for (const cont of g.containers) ul.appendChild(containerRow(cont));
-      card.append(h, ul);
-      container.appendChild(card);
+      for (const cont of g.containers) {
+        ul.appendChild(containerRow(cont));
+        if (cont.id === selected) {
+          const slot = document.createElement("li");
+          slot.className = "detail-slot";
+          slot.appendChild(card);
+          ul.appendChild(slot);
+        }
+      }
+      groupCard.append(h, ul);
+      container.appendChild(groupCard);
     }
+    logs.scrollTop = logsTop;
   }
 
   async function refresh() {
@@ -147,6 +180,8 @@
     $("detail-card").hidden = false;
     try {
       const d = await call("/containers/" + id);
+      // A later click moved on while this answer was on its way.
+      if (id !== selected) return;
       $("d-name").textContent = d.name;
       $("d-image").textContent = d.image;
       $("d-kv").innerHTML = "";
@@ -172,8 +207,13 @@
         $("d-actions").appendChild(b);
       }
       $("d-note").hidden = true;
+      // A refresh of the same container keeps where the reader was in the logs.
+      const logsTop = shownId === id ? $("d-logs").scrollTop : 0;
+      shownId = id;
       $("d-logs").textContent = d.logsError ? "Logs are unavailable: " + d.logsError : (d.logs && d.logs.trim() ? d.logs : "No recent logs.");
+      $("d-logs").scrollTop = logsTop;
     } catch (e) {
+      if (id !== selected) return;
       $("d-note").hidden = false;
       $("d-note").textContent = e.message;
     }
