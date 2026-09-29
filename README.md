@@ -6,7 +6,7 @@ restarts them — with an agent, from a workspace, or from the command
 palette. It replaces PiCode's old built-in Docker app (ADR-0230, D3): the
 same Docker Engine client, ported out to its own installable extension.
 
-> v0.1 — plan in [docs/plan.md](docs/plan.md).
+> v0.2 — plan in [docs/plan.md](docs/plan.md).
 
 ## Install
 
@@ -18,6 +18,12 @@ workspace whose folder has a `docker-compose.yml`, `compose.yml` or
 
 ## In PiCode
 
+- **Two agent tools** (`docker_containers`, `docker_container`) let any
+  agent read what is running and one container's state, resources and
+  logs — no confirmation needed, since they only read. Deeper tools
+  (start/stop/restart, history, resource cleanup, health monitoring) stay
+  in PiCode's `packages/pi-sysadmin`, which keeps its own audited backend;
+  see the [Docker guide](https://github.com/cfpperche/picode/blob/main/docs-site/guide/docker.md).
 - **The Docker page** (Apps → Docker, or its tab) lists containers by
   compose project, and a container's detail: state, health, a resource
   sample, recent logs, and Start / Stop / Restart.

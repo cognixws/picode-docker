@@ -7,6 +7,11 @@
 //	GET  /containers            every container, grouped by compose project
 //	GET  /containers/{id}       one container: detail, a resource sample, logs
 //	POST /containers/{id}/action {action: start|stop|restart}
+//
+// The container/detail shapes and the connect/validate helpers live in
+// ../engine (engine/detail.go), shared with the docker_containers and
+// docker_container tools in ../mcp — one Docker Engine client, two ways to
+// reach it (PiCode's page, an agent).
 package main
 
 import (
@@ -28,63 +33,14 @@ import (
 var secret = os.Getenv("PICODE_EXT_PROXY_SECRET")
 
 type group struct {
-	Project    string      `json:"project"`
-	Containers []container `json:"containers"`
-}
-
-type container struct {
-	ID      string   `json:"id"`
-	Name    string   `json:"name"`
-	Image   string   `json:"image"`
-	State   string   `json:"state"`
-	Status  string   `json:"status"`
-	Service string   `json:"service,omitempty"`
-	Health  string   `json:"health,omitempty"`
-	Actions []string `json:"actions"`
-}
-
-func toRow(c engine.Container) container {
-	var actions []string
-	for _, verb := range []string{"start", "stop", "restart"} {
-		if validAction(verb, c.State) {
-			actions = append(actions, verb)
-		}
-	}
-	return container{ID: c.ID, Name: c.Name, Image: c.Image, State: c.State, Status: c.Status, Service: c.Service, Health: c.Health, Actions: actions}
-}
-
-// actionPast is the participle for each valid action's messages ("stop" is
-// not "stoped", %sed is not English).
-var actionPast = map[string]string{"start": "started", "stop": "stopped", "restart": "restarted"}
-
-func validAction(action, state string) bool {
-	switch action {
-	case "start":
-		return state == "created" || state == "exited"
-	case "stop":
-		return state == "running" || state == "restarting"
-	case "restart":
-		return state == "running"
-	}
-	return false
-}
-
-func connect(ctx context.Context) (*engine.Client, error) {
-	c, err := engine.LocalClient(ctx)
-	if err != nil {
-		return nil, err
-	}
-	if err := c.Check(ctx); err != nil {
-		c.Close()
-		return nil, err
-	}
-	return c, nil
+	Project    string       `json:"project"`
+	Containers []engine.Row `json:"containers"`
 }
 
 func listContainers(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
-	c, err := connect(ctx)
+	c, err := engine.Connect(ctx)
 	if err != nil {
 		reply(w, 502, map[string]string{"message": err.Error()})
 		return
@@ -102,7 +58,7 @@ func listContainers(w http.ResponseWriter, r *http.Request) {
 			g = &group{Project: row.Project}
 			byProject[row.Project] = g
 		}
-		g.Containers = append(g.Containers, toRow(row))
+		g.Containers = append(g.Containers, engine.RowOf(row))
 	}
 	names := make([]string, 0, len(byProject))
 	for name := range byProject {
@@ -121,31 +77,16 @@ func listContainers(w http.ResponseWriter, r *http.Request) {
 	reply(w, 200, map[string]any{"groups": groups, "count": len(rows)})
 }
 
-type detail struct {
-	container
-	StartedAt     string   `json:"startedAt,omitempty"`
-	RestartCount  int      `json:"restartCount"`
-	ExitCode      int      `json:"exitCode"`
-	OOMKilled     bool     `json:"oomKilled"`
-	CPUPercent    *float64 `json:"cpuPercent,omitempty"`
-	MemoryBytes   uint64   `json:"memoryBytes,omitempty"`
-	LimitBytes    uint64   `json:"limitBytes,omitempty"`
-	StatsError    string   `json:"statsError,omitempty"`
-	Logs          string   `json:"logs,omitempty"`
-	LogsTruncated bool     `json:"logsTruncated,omitempty"`
-	LogsError     string   `json:"logsError,omitempty"`
-}
-
 func containerDetail(w http.ResponseWriter, r *http.Request, id string) {
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
-	c, err := connect(ctx)
+	c, err := engine.Connect(ctx)
 	if err != nil {
 		reply(w, 502, map[string]string{"message": err.Error()})
 		return
 	}
 	defer c.Close()
-	full, err := c.Inspect(ctx, id)
+	d, err := engine.BuildDetail(ctx, c, id)
 	if err != nil {
 		var apiErr *engine.APIError
 		code := 502
@@ -154,17 +95,6 @@ func containerDetail(w http.ResponseWriter, r *http.Request, id string) {
 		}
 		reply(w, code, map[string]string{"message": err.Error()})
 		return
-	}
-	d := detail{container: toRow(full), StartedAt: full.StartedAt, RestartCount: full.RestartCount, ExitCode: full.ExitCode, OOMKilled: full.OOMKilled}
-	if s, err := c.Stats(ctx, id); err == nil {
-		d.CPUPercent, d.MemoryBytes, d.LimitBytes = &s.CPUPercent, s.MemoryBytes, s.LimitBytes
-	} else {
-		d.StatsError = err.Error()
-	}
-	if logs, err := c.Logs(ctx, full); err == nil {
-		d.Logs, d.LogsTruncated = logs.Text, logs.Truncated
-	} else {
-		d.LogsError = err.Error()
 	}
 	reply(w, 200, d)
 }
@@ -177,14 +107,14 @@ func containerAction(w http.ResponseWriter, r *http.Request, id string) {
 		reply(w, 400, map[string]string{"message": "give an action"})
 		return
 	}
-	past, ok := actionPast[req.Action]
+	past, ok := engine.ActionPast[req.Action]
 	if !ok {
 		reply(w, 400, map[string]string{"message": "action must be start, stop or restart"})
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
-	c, err := connect(ctx)
+	c, err := engine.Connect(ctx)
 	if err != nil {
 		reply(w, 502, map[string]string{"message": err.Error()})
 		return
@@ -195,7 +125,7 @@ func containerAction(w http.ResponseWriter, r *http.Request, id string) {
 		reply(w, 502, map[string]string{"message": err.Error()})
 		return
 	}
-	if !validAction(req.Action, full.State) {
+	if !engine.ValidAction(req.Action, full.State) {
 		reply(w, 409, map[string]string{"message": fmt.Sprintf("%s cannot be %s from its current state (%s)", full.Name, past, full.State)})
 		return
 	}
