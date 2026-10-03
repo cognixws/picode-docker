@@ -11,7 +11,7 @@ same Docker Engine client, ported out to its own installable extension.
 ## Install
 
 In PiCode: **Extensions → Install extension**, paste
-`https://github.com/cfpperche/picode-docker`, review, **Install**, then turn
+`https://github.com/cognixws/picode-docker`, review, **Install**, then turn
 it on in the workspaces where you want it, or let it turn itself on: any
 workspace whose folder has a `docker-compose.yml`, `compose.yml` or
 `Dockerfile` does that on its own (you can always turn it back off).
