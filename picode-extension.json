@@ -1,8 +1,8 @@
 {
   "id": "docker",
   "name": "Docker",
-  "version": "0.2.4",
-  "apiVersion": 1,
+  "version": "0.3.0",
+  "apiVersion": 17,
   "publisher": "PiCode",
   "description": "See and manage your Docker containers, grouped by compose project, from PiCode.",
   "icon": "icons/docker.png",
@@ -70,5 +70,10 @@
       "compose.yml",
       "Dockerfile"
     ]
+  },
+  "storageProvider": {
+    "name": "Docker",
+    "measurePath": "/storage/measure",
+    "cleanPath": "/storage/clean"
   }
 }

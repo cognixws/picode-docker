@@ -52,3 +52,15 @@ layer. See [docs/plan.md](docs/plan.md).
 ## License
 
 Apache-2.0.
+
+## In Settings ▸ Storage (0.3.0)
+
+The extension tells COGNIX[WS]'s Storage page what Docker keeps on your
+computer while the extension is on in a workspace: each image no container
+uses, the build cache, and each volume no container uses. Clean up there
+gives an item back through Docker itself, never forced. The build cache
+comes checked (a build makes it again); images and volumes come unchecked
+(one built here cannot be downloaded again, a volume holds data) and go
+only when you check them, one by one, and only if no container uses them
+at that moment. A volume names the compose or Supabase project it
+belongs to. It needs COGNIX[WS] with extension API 17.

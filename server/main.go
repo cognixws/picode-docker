@@ -1,12 +1,16 @@
 // Command picode-docker-server is picode-docker's background program
 // (PiCode ADR-0230: process, pages, commands). PiCode starts it while the
-// extension is on in a workspace and is the only caller: every request
+// extension is on in a workspace (Settings ▸ Storage asks it then) and is
+// the only caller: every request
 // carries X-PiCode-Proxy-Secret, the value PiCode gave this process in
 // PICODE_EXT_PROXY_SECRET.
 //
 //	GET  /containers            every container, grouped by compose project
 //	GET  /containers/{id}       one container: detail, a resource sample, logs
 //	POST /containers/{id}/action {action: start|stop|restart}
+//	GET  /storage/measure       what Docker keeps, for Settings ▸ Storage
+//	POST /storage/clean {item}  give one reviewed item back (PiCode's
+//	                            storageProvider door, apiVersion 17)
 //
 // The container/detail shapes and the connect/validate helpers live in
 // ../engine (engine/detail.go), shared with the docker_containers and
@@ -136,6 +140,53 @@ func containerAction(w http.ResponseWriter, r *http.Request, id string) {
 	reply(w, 200, map[string]string{"message": strings.ToUpper(past[:1]) + past[1:] + " " + full.Name + "."})
 }
 
+// storageMeasure answers PiCode's storageProvider measurePath.
+func storageMeasure(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 25*time.Second)
+	defer cancel()
+	c, err := engine.Connect(ctx)
+	if err != nil {
+		reply(w, 502, map[string]string{"error": err.Error()})
+		return
+	}
+	defer c.Close()
+	items, err := c.StorageItems(ctx)
+	if err != nil {
+		reply(w, 502, map[string]string{"error": err.Error()})
+		return
+	}
+	reply(w, 200, map[string]any{"sentence": "The build cache, and the images and volumes no container uses: those go one by one, only the ones you check.", "items": items})
+}
+
+// storageClean gives one reviewed item back: 409 when it is no longer
+// there or something uses it now.
+func storageClean(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Item string `json:"item"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&req); err != nil || req.Item == "" {
+		reply(w, 400, map[string]string{"error": "give an item"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 9*time.Minute)
+	defer cancel()
+	c, err := engine.Connect(ctx)
+	if err != nil {
+		reply(w, 502, map[string]string{"error": err.Error()})
+		return
+	}
+	defer c.Close()
+	freed, err := c.CleanStorageItem(ctx, req.Item)
+	switch {
+	case errors.Is(err, engine.ErrNotFree):
+		reply(w, 409, map[string]string{"error": "no longer there, or something uses it now"})
+	case err != nil:
+		reply(w, 502, map[string]string{"error": err.Error()})
+	default:
+		reply(w, 200, map[string]any{"freed": freed})
+	}
+}
+
 func reply(w http.ResponseWriter, code int, body any) {
 	data, _ := json.Marshal(body)
 	w.Header().Set("Content-Type", "application/json")
@@ -159,6 +210,8 @@ func main() {
 	mux.HandleFunc("GET /containers", withAuth(listContainers))
 	mux.HandleFunc("GET /containers/{id}", withAuth(func(w http.ResponseWriter, r *http.Request) { containerDetail(w, r, r.PathValue("id")) }))
 	mux.HandleFunc("POST /containers/{id}/action", withAuth(func(w http.ResponseWriter, r *http.Request) { containerAction(w, r, r.PathValue("id")) }))
+	mux.HandleFunc("GET /storage/measure", withAuth(storageMeasure))
+	mux.HandleFunc("POST /storage/clean", withAuth(storageClean))
 	log.Printf("picode-docker server on 127.0.0.1:%s", port)
 	if err := http.ListenAndServe("127.0.0.1:"+port, mux); err != nil {
 		log.Fatal(err)
